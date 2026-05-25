@@ -17,7 +17,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.html.*
 import java.io.File
-import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.*
 
 fun main() {
@@ -55,7 +57,7 @@ suspend fun ApplicationCall.respondInfo() {
         body {
             style {
                 unsafe {
-                    """
+                    +"""
                     table {
                         font: 1em Arial;
                         border: 1px solid black;
@@ -72,7 +74,7 @@ suspend fun ApplicationCall.respondInfo() {
                         text-align: left;
                         padding: 0.5em 1em;
                     }
-                """.trimIndent()
+                    """.trimIndent()
                 }
             }
             h1 {
@@ -88,7 +90,8 @@ suspend fun ApplicationCall.respondInfo() {
                 row("request.path()", request.path())
                 row("request.host()", request.host())
                 row("request.document()", request.document())
-                row("request.location()", request.location())
+                // request.location() was removed in Ktor 3.x when the Locations plugin
+                // was replaced by the Resources plugin for type-safe routing.
                 row("request.queryParameters", request.queryParameters.formUrlEncode())
 
                 row("request.userAgent()", request.userAgent())
@@ -160,7 +163,18 @@ suspend fun ApplicationCall.respondInfo() {
 
 fun Route.listing(folder: File) {
     val pathParameterName = "static-content-path-parameter"
-    val dateFormat = SimpleDateFormat("dd-MMM-YYYY HH:mm")
+
+    // DateTimeFormatter is thread-safe and works correctly with coroutines, unlike
+    // SimpleDateFormat which is not thread-safe and must never be shared across threads.
+    // Pattern notes:
+    //   - 'yyyy' is the calendar year. Do NOT use 'YYYY' (that is ISO week-based year
+    //     and gives wrong results for dates in late December / early January).
+    //   - Locale.ENGLISH ensures month names (MMM) are always in English regardless
+    //     of the JVM locale configured on the server.
+    val dateFormat: DateTimeFormatter = DateTimeFormatter
+        .ofPattern("dd-MMM-yyyy HH:mm", Locale.ENGLISH)
+        .withZone(ZoneId.systemDefault())
+
     get("{$pathParameterName...}") {
         val relativePath = call.parameters.getAll(pathParameterName)?.joinToString(File.separator) ?: return@get
         val file = folder.combineSafe(relativePath)
@@ -217,12 +231,16 @@ fun Route.listing(folder: File) {
     }
 }
 
-data class FileInfo(val name: String, val date: Date, val directory: Boolean, val size: Long)
+// Instant is the modern replacement for java.util.Date (available since Java 8).
+// It represents a point in time and is immutable, making it safe to use across threads.
+data class FileInfo(val name: String, val date: Instant, val directory: Boolean, val size: Long)
 
 suspend fun File.listSuspend(includeParent: Boolean = false): List<FileInfo> = withContext(Dispatchers.IO) {
-    val parentEntry = if (includeParent) listOf(FileInfo("..", Date(), true, 0L)) else emptyList()
+    // Directories are listed before files, and within each group entries are
+    // sorted case-insensitively by name. The ".." parent entry always comes first.
+    val parentEntry = if (includeParent) listOf(FileInfo("..", Instant.now(), true, 0L)) else emptyList()
     val fileEntries = listFiles()?.map {
-        FileInfo(it.name, Date(it.lastModified()), it.isDirectory, it.length())
+        FileInfo(it.name, Instant.ofEpochMilli(it.lastModified()), it.isDirectory, it.length())
     } ?: emptyList()
 
     (parentEntry + fileEntries)
