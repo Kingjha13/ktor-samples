@@ -90,8 +90,7 @@ suspend fun ApplicationCall.respondInfo() {
                 row("request.path()", request.path())
                 row("request.host()", request.host())
                 row("request.document()", request.document())
-                // request.location() was removed in Ktor 3.x when the Locations plugin
-                // was replaced by the Resources plugin for type-safe routing.
+                // request.location() removed in Ktor 3.x; use the Resources plugin for type-safe routing.
                 row("request.queryParameters", request.queryParameters.formUrlEncode())
 
                 row("request.userAgent()", request.userAgent())
@@ -164,13 +163,8 @@ suspend fun ApplicationCall.respondInfo() {
 fun Route.listing(folder: File) {
     val pathParameterName = "static-content-path-parameter"
 
-    // DateTimeFormatter is thread-safe and works correctly with coroutines, unlike
-    // SimpleDateFormat which is not thread-safe and must never be shared across threads.
-    // Pattern notes:
-    //   - 'yyyy' is the calendar year. Do NOT use 'YYYY' (that is ISO week-based year
-    //     and gives wrong results for dates in late December / early January).
-    //   - Locale.ENGLISH ensures month names (MMM) are always in English regardless
-    //     of the JVM locale configured on the server.
+    // Use DateTimeFormatter instead of SimpleDateFormat: thread-safe and coroutine-friendly.
+    // 'yyyy' is the calendar year; 'YYYY' (week-based) gives wrong results near year boundaries.
     val dateFormat: DateTimeFormatter = DateTimeFormatter
         .ofPattern("dd-MMM-yyyy HH:mm", Locale.ENGLISH)
         .withZone(ZoneId.systemDefault())
@@ -231,13 +225,10 @@ fun Route.listing(folder: File) {
     }
 }
 
-// Instant is the modern replacement for java.util.Date (available since Java 8).
-// It represents a point in time and is immutable, making it safe to use across threads.
+// Use Instant instead of Date: immutable and compatible with DateTimeFormatter.
 data class FileInfo(val name: String, val date: Instant, val directory: Boolean, val size: Long)
 
 suspend fun File.listSuspend(includeParent: Boolean = false): List<FileInfo> = withContext(Dispatchers.IO) {
-    // Directories are listed before files, and within each group entries are
-    // sorted case-insensitively by name. The ".." parent entry always comes first.
     val parentEntry = if (includeParent) listOf(FileInfo("..", Instant.now(), true, 0L)) else emptyList()
     val fileEntries = listFiles()?.map {
         FileInfo(it.name, Instant.ofEpochMilli(it.lastModified()), it.isDirectory, it.length())
